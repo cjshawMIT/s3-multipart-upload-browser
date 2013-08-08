@@ -98,3 +98,6 @@ Just a mention or gratitude of this work is enough :)
 Contributors
 ------------
 @hridayeshgupta - Hridayesh Gupta - https://github.com/hridayeshgupta
+
+@thecolorblue - Brad Davis - https://github.com/thecolorblue
+@ienzam - Md. Enzam Hossain - https://github.com/ienzam
