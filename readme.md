@@ -38,6 +38,7 @@ How to use it
 -------------
 1. set the constants in config.php
 2. Enable CORS in S3 bucket where you want to upload files. Essentially through web console in s3 bucket propreties->permissions set CORS to the following XML.
+```
 <?xml version="1.0" encoding="UTF-8"?>
 <CORSConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
     <CORSRule>
@@ -51,15 +52,18 @@ How to use it
         <AllowedHeader>*</AllowedHeader>
     </CORSRule>
 </CORSConfiguration>
+```
+
 3. Open upload.html to see demo.
 Following are options can be configured when making upload object.
-  PART_SIZE: 5 * 1024 * 1024,
+```
+	PART_SIZE: 5 * 1024 * 1024,
 	SERVER_LOC: 'server.php',
 	MAX_PARALLEL_UPLOADS: 2,
 	onServerError: function(){},
 	onProgressChanged: function(){},
 	onUploadCompleted: function(){}
-
+```
 
 References
 -------------
