@@ -17,13 +17,10 @@
         </p>
         <p>
             <progress id="uploading_progress" value="0" max="100"></progress>
-            <- Uploading Progress Bar
             <br>
             <progress id="uploaded_progress" value="0" max="100"></progress>
-            <- Uploaded Progress Bar
             <br>
             <progress id="summed_progress" value="0" max="100"></progress>
-            <- Uploading + Uploaded Progress Bar
         </p>
         <script src="http://ajax.googleapis.com/ajax/libs/jquery/1.9.1/jquery.js"></script>
         <script src="upload.js"></script>
@@ -46,7 +43,7 @@
                 function upload(user, pass) {
                     var file = $('#file')[0].files[0];
                     s3upload = new S3MultiUpload(file, {
-    				onServerError: function(command, jqXHR, textStatus, errorThrown) {
+					onServerError: function(command, jqXHR, textStatus, errorThrown) {
                         if (jqXHR.status === 403) {
                             alert("Sorry you are not allowed to upload");
                         } else {
