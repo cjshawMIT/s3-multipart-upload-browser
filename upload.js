@@ -1,42 +1,42 @@
 /**
  * S3MultiUpload Object
- * Create a new instance with new S3MultiUpload(file, otherInfo)
+ * Create a new instance with new S3MultiUpload(file, config)
  * To start uploading, call start()
  * You can pause with pause()
  * Resume with resume()
  * Cancel with cancel()
  *
- * You can override the following functions (no event emitter :( , description below on the function definition, at the end of the file)
- * onServerError = function(command, jqXHR, textStatus, errorThrown) {}
- * onS3UploadError = function(xhr) {}
- * onProgressChanged = function(uploadingSize, uploadedSize, totalSize) {}
- * onUploadCompleted = function() {}
+ * config can take these fields
+ * PART_SIZE: 5 * 1024 * 1024, //minimum part size defined by aws s3
+ * SERVER_LOC: 'server.php', //location of the server
+ * MAX_PARALLEL_UPLOADS: 2,
+ * onServerError : function(command, jqXHR, textStatus, errorThrown) {}
+ * onS3UploadError : function(xhr) {}
+ * onProgressChanged : function(uploadingSize, uploadedSize, totalSize) {}
+ * onUploadCompleted : function() {}
  *
  * @param {type} file
- * @param {type} otheInfo
  * @returns {MultiUpload}
  */
-function S3MultiUpload(file, otheInfo) {
-    this.PART_SIZE = 5 * 1024 * 1024; //minimum part size defined by aws s3
-    this.SERVER_LOC = 'server.php'; //location of the server
-    this.RETRY_WAIT_SEC = 30; //wait before retrying again on upload failure
-    this.file = file;
-    this.fileInfo = {
-        name: this.file.name,
-        type: this.file.type,
-        size: this.file.size,
-        lastModifiedDate: this.file.lastModifiedDate
+function S3MultiUpload(file, conf) {
+    var state = this.consts.NOT_STARTED;
+	var config = $.extend({}, this.defaultConfig, conf);
+    var file = file;
+    var fileInfo = {
+        name: file.name,
+        type: file.type,
+        size: file.size,
+		numParts: Math.ceil(file.size/config.PART_SIZE),
+        lastModifiedDate: file.lastModifiedDate,
+		uploaded: 0,
+		uploading: 0
     };
-    this.sendBackData = null;
-    this.isPaused = false;
-    this.uploadXHR = null;
-    this.otherInfo = otheInfo;
-    this.uploadedSize = 0;
-    this.uploadingSize = 0;
-    this.curUploadInfo = {
-        blob: null,
-        partNum: 0
-    };
+	var s3Key = null;//key(path) where file will be uploaded at s3
+	var uploadId = null;//s3 multipart upload key
+    var uploadedSize = 0;
+    var uploadingSize = 0;
+    var uploadInfo = [];
+	var abortInfo = null;
     this.progress = [];
 
     if (console && console.log) {
@@ -45,225 +45,202 @@ function S3MultiUpload(file, otheInfo) {
         this.log = function() {
         };
     }
-}
-
-
-    /** private */
-    S3MultiUpload.prototype.createMultipartUpload = function() {
-        var self = this;
-        $.get(self.SERVER_LOC, {
-            command: 'CreateMultipartUpload',
-            fileInfo: self.fileInfo,
-            otherInfo: self.otherInfo
-        }).done(function(data) {
-            self.sendBackData = data;
-            self.uploadPart(1);
-        }).fail(function(jqXHR, textStatus, errorThrown) {
-            self.onServerError('CreateMultipartUpload', jqXHR, textStatus, errorThrown);
-        });
-    };
-
-    /**
-     * Call this function to start uploading to server
-     *
-     */
-    S3MultiUpload.prototype.start = function() {
-        this.uploadPart(0);
-    };
-
-    /** private */
-    S3MultiUpload.prototype.uploadPart = function(partNum) {
-        var blobs = this.blobs = [], promises = [];
-        var start = 0;
-        var end, blob;
-
-        this.curUploadInfo.partNum = partNum;
-
-        if (this.curUploadInfo.partNum === 0) {
-            this.createMultipartUpload();
-            return;
-        }
-
-        if (start > this.file.size) {
-            this.completeMultipartUpload();
-            return;
-        }
-        while(start < this.file.size) {
-            start = this.PART_SIZE * this.curUploadInfo.partNum++;
-            end = Math.min(start + this.PART_SIZE, this.file.size);
-            blobs.push(this.file.slice(start, end));
-        }
-
-        for (var i = 0; i < blobs.length; i++) {
-            blob = blobs[i];
-            promises.push($.get(this.SERVER_LOC, {
-                command: 'SignUploadPart',
-                sendBackData: this.sendBackData,
-                partNumber: this.curUploadInfo.partNum,
-                contentLength: blob.size
-            }));
-        }
-
-        // we need to pass $.when an array of arguments
-        // so we are using .apply()
-        $.when.apply(null, promises)
-         .then(this.sendAll.bind(this), this.onServerError);
-    };
-
-    S3MultiUpload.prototype.sendAll = function() {
-        var blobs = this.blobs;
-        var length = blobs.length;
-        for (var i = 0; i < length; i++) {
-            // sendToS3( XHRresponse, blob);
-            this.sendToS3(arguments[i][0], blobs[i], i);
-        }
-    };
-    /** private */
-    S3MultiUpload.prototype.sendToS3 = function(data, blob, index) {
-        var self = this;
-        var url = data['url'];
+	/** private */
+	var self = this;
+	var initiateS3MultipartUpload = function() {
+		state = self.consts.PREPARING;
+		$.ajax({
+			url: config.SERVER_LOC,
+			type: "GET",
+			data: {command: 'CreateMultipartUpload', fileInfo: fileInfo},
+			success: function(data, status, jqXHR) {
+				s3Key = data.key;
+				$.ajax({
+					url: data.url,
+					type: "POST",
+					success: function(res) {
+						//check and verify response
+						uploadId = $(res).find('UploadId').html();
+						prepareUpload();
+					},
+					error: function(jqXHR, textStatus, errorThrown) {
+						state = self.consts.ERROR;
+						config.onServerError('CreateMultipartUpload', jqXHR, textStatus, errorThrown);
+					}
+				});
+			},
+			error: function(jqXHR, textStatus, errorThrown) {
+				state = self.consts.ERROR;
+				config.onServerError('CreateMultipartUpload', jqXHR, textStatus, errorThrown);
+			}
+		});
+	};
+	var prepareUpload = function() {
+		$.ajax({
+			url: config.SERVER_LOC,
+			type: "GET",
+			data: {command:'signuploadpart', key:s3Key, numParts:fileInfo.numParts, uploadId: uploadId},
+			success: function(data) {
+				uploadInfo = data.parts;
+				abortInfo = data.abort;
+				completeInfo = data.complete;
+				startUpload();
+			},
+			error: function(jqXHR, textStatus, errorThrown) {
+				state = self.consts.ERROR;
+				config.onServerError('CreateMultipartUpload', jqXHR, textStatus, errorThrown);
+			}
+		});
+	};
+	var startUpload = function() {
+		state = self.consts.UPLOADING;
+		var blobs = self.blobs = [];
+		var start = 0;
+		var end, blob;
+		for(var i=0;i<uploadInfo.length; i++) {
+			start = config.PART_SIZE * i;
+			end = Math.min(start + config.PART_SIZE, file.size);
+			uploadInfo[i].blob = file.slice(start, end);
+			uploadInfo[i].status = self.consts.NOT_STARTED;
+			uploadInfo[i].numTry = 0;
+		}
+		self.numUploading = 0;
+		uploadToS3();
+	};
+	var uploadToS3 = function() {
+		if(state == self.consts.CANCELLED) return;
+		for(var i=0; i<uploadInfo.length; i++) {
+			if(self.numUploading >= config.MAX_PARALLEL_UPLOADS) {
+				return;
+			}
+			if(uploadInfo[i].status == self.consts.UPLOADING || uploadInfo[i].status == self.consts.SUCCESS) continue;//0:not started, 1:progress, 2: success, 3:error
+			sendToS3(uploadInfo[i].url, uploadInfo[i].blob, i);
+			self.numUploading++;
+		}
+		if(self.numUploading < 1) {
+			completeMultipartUpload();
+		}
+	};
+	var sendToS3 = function(url, blob, index) {
+		if(state == self.consts.CANCELLED) return;
         var size = blob.size;
-        var authHeader = data['authHeader'];
-        var dateHeader = data['dateHeader'];
-        var request = self.uploadXHR = new XMLHttpRequest();
-        request.onreadystatechange = function() {
-            if (request.readyState === 4) {
-                self.uploadXHR = null;
-                self.progress[index] = 100;
-                if (request.status !== 200) {
-                    self.updateProgressBar();
-                    if (!self.isPaused)
-                        self.onS3UploadError(request);
-                    return;
-                }
-                self.uploadedSize += blob.size;
-                self.updateProgressBar();
-            }
-        };
-
-        request.upload.onprogress = function(e) {
-            if (e.lengthComputable) {
-                self.progress[index] = e.loaded / size;
-                self.updateProgressBar();
-            }
-        };
-        request.open('PUT', url, true);
-        request.setRequestHeader("x-amz-date", dateHeader);
-        request.setRequestHeader("Authorization", authHeader);
-        request.send(blob);
+		uploadInfo[index].numTry++;
+		fileInfo.uploading += blob.size;
+		uploadInfo[index].jqHXR = $.ajax({
+			url: url,
+			type: "PUT",
+			data: blob,
+			processData: false,
+			contentType: false,
+			success: function(data, status, jqXHR) {
+				self.log("put success", data);
+				uploadInfo[index].jqHXR = null;
+				uploadInfo[index].etag = jqXHR.getResponseHeader('Etag').replace('"', "");
+                fileInfo.uploaded += blob.size;
+				fileInfo.uploading -= blob.size;
+                updateProgressBar();
+				uploadInfo[index].status = self.consts.SUCCESS;
+				self.numUploading--;
+				uploadToS3();
+			},
+			error: function(a,b,c) {
+				self.log("put failed",a,b,c);
+				uploadInfo[index].jqHXR = null;
+				uploadInfo[index].status = self.consts.ERROR;//retry later
+				uploadToS3();
+			}
+		});
+		uploadInfo[index].jqHXR.progress = function(a,b,c) {
+			self.log("progress",a,b,c)
+		};
     };
-
-    /**
+	var completeMultipartUpload = function() {
+		if(state == self.consts.CANCELLED) return;
+		state = self.consts.FINISHING;
+		var xmlCompleteReq = "<CompleteMultipartUpload>";
+		for(var i=0; i<uploadInfo.length; i++) {
+			xmlCompleteReq += "<Part><PartNumber>"+(i+1)+"</PartNumber><ETag>"+uploadInfo[i].etag+"</ETag></Part>";
+		}
+		xmlCompleteReq += "</CompleteMultipartUpload>";
+		$.ajax({
+			url: completeInfo,
+			type: "POST",
+			processData: false,
+			contentType: "text/plain; charset=UTF-8",
+			data: xmlCompleteReq,
+			success: function(data) {
+				self.log("success complete", data);
+				config.onUploadCompleted(data);
+			},
+			error : function(jqXHR, textStatus, errorThrown) {
+				state = self.consts.ERROR;
+				config.onServerError('CompleteMultipartUpload', jqXHR, textStatus, errorThrown);
+			}
+		});
+    };
+	var updateProgressBar = function() {
+        config.onProgressChanged(fileInfo.uploading, fileInfo.uploaded, fileInfo.size);
+	};
+	
+	/*public methods */
+	this.start = function() {
+		if (!(window.File && window.FileReader && window.FileList && window.Blob && window.Blob.prototype.slice)) {
+			config.onServerError("Browser not supported");
+			return;
+		}
+		initiateS3MultipartUpload();
+	};
+	/**
      * Pause the upload
      * Remember, the current progressing part will fail,
      * that part will start from beginning (< 5MB of uplaod is wasted)
      */
-    S3MultiUpload.prototype.pause = function() {
-        this.isPaused = true;
-        if (this.uploadXHR !== null) {
-            this.uploadXHR.abort();
-        }
+    this.pause = function() {
+		state = self.consts.PAUSED;
+        for(var i=0; i<uploadInfo.length; i++) {
+			if(uploadInfo[i].jqXHR != null) {
+				uploadInfo[i].jqXHR.abort();
+				uploadInfo[i].jqXHR = null;
+				uploadInfo[i].state = self.consts.ERROR;
+			}
+		}
     };
-
-    /**
-     * Resumes the upload
-     *
-     */
-    S3MultiUpload.prototype.resume = function() {
-        this.isPaused = false;
-        this.uploadPart(this.curUploadInfo.partNum);
+	this.resume = function() {
+		state = self.consts.UPLOADING;
+		uploadToS3();
     };
-
-    S3MultiUpload.prototype.cancel = function() {
-        var self = this;
+	this.cancel = function() {
+		var self = this;
         self.pause();
-        $.get(self.SERVER_LOC, {
-            command: 'AbortMultipartUpload',
-            sendBackData: self.sendBackData
-        }).done(function(data) {
-
-        });
+		state = self.consts.CANCELLED;
+        $.ajax({
+			url: abortInfo,
+			type: "DELETE",
+			processData: false,
+			contentType: false,
+			success: function(data) {
+				
+			},
+			error: function() {
+			}
+		});
     };
-
-    S3MultiUpload.prototype.waitRetry = function() {
-        var self = this;
-        window.setTimeout(function() {
-            self.retry();
-        }, this.RETRY_WAIT_SEC * 1000);
-    };
-
-    S3MultiUpload.prototype.retry = function() {
-        if (!this.isPaused && self.uploadXHR === null) {
-            this.uploadPart(this.curUploadInfo.partNum);
-        }
-    };
-
-    /** private */
-    S3MultiUpload.prototype.completeMultipartUpload = function() {
-        var self = this;
-        $.get(self.SERVER_LOC, {
-            command: 'CompleteMultipartUpload',
-            sendBackData: self.sendBackData
-        }).done(function(data) {
-            self.onUploadCompleted(data);
-        }).fail(function(jqXHR, textStatus, errorThrown) {
-            self.onServerError('CompleteMultipartUpload', jqXHR, textStatus, errorThrown);
-        });
-    };
-
-    /** private */
-    S3MultiUpload.prototype.updateProgressBar = function() {
-        var progress = this.progress;
-        var length = progress.length;
-        var total = 0;
-        for (var i = 0; i < progress.length; i++) {
-            total = total + progress[i];
-        }
-        total = total / length;
-
-        this.onProgressChanged(this.uploadingSize, total, this.file.size);
-    };
-
-    /**
-     * Overrride this function to catch errors occured when communicating to your server
-     * If this occurs, the program stops, you can retry by retry() or wait and retry by waitRetry()
-     *
-     * @param {type} command Name of the command which failed,one of 'CreateMultipartUpload', 'SignUploadPart','CompleteMultipartUpload'
-     * @param {type} jqXHR jQuery XHR
-     * @param {type} textStatus resonse text status
-     * @param {type} errorThrown the error thrown by the server
-     */
-    S3MultiUpload.prototype.onServerError = function(command, jqXHR, textStatus, errorThrown) {
-    };
-
-    /**
-     * Overrride this function to catch errors occured when uploading to S3
-     * If this occurs, we retry upload after RETRY_WAIT_SEC seconds
-     * Most of the time you don't need to override this, except for informing user that upload of a part failed
-     *
-     * @param XMLHttpRequest xhr the XMLHttpRequest object
-     */
-    S3MultiUpload.prototype.onS3UploadError = function(xhr) {
-        self.waitRetry();
-    };
-
-    /**
-     * Override this function to show user update progress
-     *
-     * @param {type} uploadingSize is the current upload part
-     * @param {type} uploadedSize is already uploaded part
-     * @param {type} totalSize the total size of the uploading file
-     */
-    S3MultiUpload.prototype.onProgressChanged = function(uploadingSize, uploadedSize, totalSize) {
-        this.log("uploadedSize = " + uploadedSize);
-        this.log("uploadingSize = " + uploadingSize);
-        this.log("totalSize = " + totalSize);
-    };
-
-    /**
-     * Override this method to execute something when upload finishes
-     *
-     */
-    S3MultiUpload.prototype.onUploadCompleted = function(serverData) {
-
-    };
+};
+S3MultiUpload.prototype.consts = {
+	NOT_STARTED: 0,
+	PREPARING: 1,
+	UPLOADING: 2,
+	PAUSED: 3,
+	CANCELLED: 4,
+	FINISHING: 5,
+	SUCCESS: 6,
+	ERROR: 7
+};
+S3MultiUpload.prototype.defaultConfig = {
+	PART_SIZE: 5 * 1024 * 1024, //minimum part size defined by aws s3
+	SERVER_LOC: 'server.php', //location of the server
+	MAX_PARALLEL_UPLOADS: 2,
+	onServerError: function(){},
+	onProgressChanged: function(){},
+	onUploadCompleted: function(){}
+};
