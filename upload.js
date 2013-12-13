@@ -126,6 +126,8 @@ function S3MultiUpload(file, conf) {
         var size = blob.size;
 		uploadInfo[index].numTry++;
 		fileInfo.uploading += blob.size;
+		// set part status to uploading, so it won't get uploaded again.
+		uploadInfo[index].status == self.consts.UPLOADING;
 		uploadInfo[index].jqHXR = $.ajax({
 			url: url,
 			type: "PUT",
@@ -147,6 +149,7 @@ function S3MultiUpload(file, conf) {
 				self.log("put failed",a,b,c);
 				uploadInfo[index].jqHXR = null;
 				uploadInfo[index].status = self.consts.ERROR;//retry later
+				self.numUploading--;
 				uploadToS3();
 			}
 		});
