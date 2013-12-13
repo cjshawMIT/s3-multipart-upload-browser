@@ -149,6 +149,7 @@ function S3MultiUpload(file, conf) {
 				self.log("put failed",a,b,c);
 				uploadInfo[index].jqHXR = null;
 				uploadInfo[index].status = self.consts.ERROR;//retry later
+				self.numUploading--;
 				uploadToS3();
 			}
 		});
