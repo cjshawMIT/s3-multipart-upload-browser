@@ -3,30 +3,14 @@ AWS S3 Multipart Upload from Browser
 
 What was done here
 ------------------
-I have written some javascript and php code to make big local files to
-be uploaded in Amazon S3 server directly in chunks, so it is
-resumable and recover easily from error.
-
-The process is fairly simple. At first js requests the server to generate signed requests to directly talk to s3 server.
-Then js starts to uplaod the chunks. Chunk size and number of parallel chunk uploads are configurable, however s3 requires chunk size of atleast 5MB.
-Currently progress bar is updated when one chunk have finished completely, if
-some good hearted fellow makes a it work smoothly, it will be great!
-
-Yes that's all in brief.
-
-Requirements
-------------
-* User need to have modern browser (with File API, Blob API, and xhr2 support)
-Latest Firefox, Chromium, Opera, IE (>= 10) all can do
-* PHP server (you can use any backend but mine is php server)
-
-Motivation
-----------
-I have to upload some large files in Amazon S3. Which often fails. I have read about s3 multipart uploads and browser based upload to s3 using javascript and I wanted to combine both options.
-After googling I found https://github.com/ienzam/s3-multipart-upload-browser However it lacked parrallel uploads and too much exposure to internal methods.
+Slight modification of @hridayeshgupta's code to clean up some bugs.
 
 WARNING
 -------
+My caveat:
+I did not clean up this code a lot, but rather just fixed some bugs that prevented it from working properly for me. I have a Python back end instead of PHP, but this script works very well.
+
+Original caveat:
 The codes are not well tested, poorly written, and kind of a mess.
 You should get inspiration (!) from the code and make your own version.
 Server need to have some validation which it currently lacks. Just go
@@ -38,6 +22,7 @@ How to use it
 -------------
 1. set the constants in config.php
 2. Enable CORS in S3 bucket where you want to upload files. Essentially through web console in s3 bucket propreties->permissions set CORS to the following XML.
+  - Note that the exposed Etag header is critical to making this script work.
 ```
 <?xml version="1.0" encoding="UTF-8"?>
 <CORSConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
@@ -91,12 +76,13 @@ respect their licenses.
 
 License
 -------
-Actually you can think of this code on public domain :P
-Just a mention or gratitude of this work is enough :)
-(not needed at all though)
+MIT
 
 Contributors
 ------------
+@cjshawMIT
+
+forked from:
 @hridayeshgupta - Hridayesh Gupta - https://github.com/hridayeshgupta
 
 @thecolorblue - Brad Davis - https://github.com/thecolorblue
