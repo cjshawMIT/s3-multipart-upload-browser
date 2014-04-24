@@ -26,17 +26,17 @@ function S3MultiUpload(file, conf) {
         name: file.name,
         type: file.type,
         size: file.size,
-		numParts: Math.ceil(file.size/config.PART_SIZE),
+	numParts: Math.floor(file.size/config.PART_SIZE),
         lastModifiedDate: file.lastModifiedDate,
 		uploaded: 0,
 		uploading: 0
     };
-	var s3Key = null;//key(path) where file will be uploaded at s3
-	var uploadId = null;//s3 multipart upload key
+    var s3Key = null;//key(path) where file will be uploaded at s3
+    var uploadId = null;//s3 multipart upload key
     var uploadedSize = 0;
     var uploadingSize = 0;
     var uploadInfo = [];
-	var abortInfo = null;
+    var abortInfo = null;
     this.progress = [];
 
     if (console && console.log) {
@@ -96,10 +96,13 @@ function S3MultiUpload(file, conf) {
 		state = self.consts.UPLOADING;
 		var blobs = self.blobs = [];
 		var start = 0;
-		var end, blob;
+		var end;
+		// recalculate blob size here so that last chunk isn't orphaned if it is
+		// less than the 5MB limit from AWS. Be greedy (Math.ceil instead of Math.floor)
+		var blobSize = Math.ceil(file.size / uploadInfo.length)
 		for(var i=0;i<uploadInfo.length; i++) {
-			start = config.PART_SIZE * i;
-			end = Math.min(start + config.PART_SIZE, file.size);
+			start = blobSize * i;
+			end = Math.min(start + blobSize, file.size);
 			uploadInfo[i].blob = file.slice(start, end);
 			uploadInfo[i].status = self.consts.NOT_STARTED;
 			uploadInfo[i].numTry = 0;
@@ -123,11 +126,10 @@ function S3MultiUpload(file, conf) {
 	};
 	var sendToS3 = function(url, blob, index) {
 		if(state == self.consts.CANCELLED) return;
-        var size = blob.size;
 		uploadInfo[index].numTry++;
 		fileInfo.uploading += blob.size;
 		// set part status to uploading, so it won't get uploaded again.
-		uploadInfo[index].status == self.consts.UPLOADING;
+		uploadInfo[index].status = self.consts.UPLOADING;
 		uploadInfo[index].jqHXR = $.ajax({
 			url: url,
 			type: "PUT",
